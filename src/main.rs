@@ -6,15 +6,20 @@ use ratatui::{
     widgets::{block::*, *},
 };
 
-use std::io;
+use color_eyre::{
+    eyre::{bail, WrapErr},
+    Result,
+};
 
+mod errors;
 mod tui;
 
-fn main() -> io::Result<()> {
+fn main() -> Result<()> {
+    errors::install_hooks()?;
     let mut terminal = tui::init()?;
-    let app_result = App::default().run(&mut terminal);
+    App::default().run(&mut terminal)?;
     tui::restore()?;
-    app_result
+    Ok(())
 }
 
 #[derive(Debug, Default)]
@@ -24,10 +29,10 @@ pub struct App {
 }
 
 impl App {
-    pub fn run(&mut self, terminal: &mut tui::Tui) -> io::Result<()> {
+    pub fn run(&mut self, terminal: &mut tui::Tui) -> Result<()> {
         while !self.exit {
             terminal.draw(|frame| self.render_frame(frame))?;
-            self.handle_events()?;
+            self.handle_events().wrap_err("handle events failed")?;
         }
         Ok(())
     }
@@ -36,8 +41,43 @@ impl App {
         frame.render_widget(self, frame.size());
     }
 
-    fn handle_events(&mut self) -> io::Result<()> {
-        todo!()
+    fn handle_events(&mut self) -> Result<()> {
+        match event::read()? {
+            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => self
+                .handle_key_event(key_event)
+                .wrap_err_with(|| format!("handling key event failed: \n{key_event:#?}")),
+            _ => Ok(()),
+        }
+    }
+
+    fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<()> {
+        match key_event.code {
+            KeyCode::Char('q') => self.exit(),
+            KeyCode::Char('j') => self.decrement_counter()?,
+            KeyCode::Char('k') => self.increment_counter()?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn exit(&mut self) {
+        self.exit = true;
+    }
+
+    fn decrement_counter(&mut self) -> Result<()> {
+        // if self.counter < 1 {
+        //     bail!("counter underflow");
+        // }
+        self.counter -= 1;
+        Ok(())
+    }
+
+    fn increment_counter(&mut self) -> Result<()> {
+        self.counter += 1;
+        if self.counter > 2 {
+            bail!("counter overflow");
+        }
+        Ok(())
     }
 }
 
@@ -103,5 +143,39 @@ mod tests {
         expected.set_style(Rect::new(40, 3, 3, 1), key_style);
 
         assert_eq!(buf, expected);
+    }
+
+    #[test]
+    fn handle_key_event() {
+        let mut app = App::default();
+        app.handle_key_event(KeyCode::Char('k').into()).unwrap();
+        assert_eq!(app.counter, 1);
+
+        app.handle_key_event(KeyCode::Char('j').into()).unwrap();
+        assert_eq!(app.counter, 0);
+
+        let mut app = App::default();
+        app.handle_key_event(KeyCode::Char('q').into()).unwrap();
+        assert_eq!(app.exit, true);
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to subtract with overflow")]
+    fn handle_key_event_panic() {
+        let mut app = App::default();
+        let _ = app.handle_key_event(KeyCode::Char('j').into());
+    }
+
+    #[test]
+    fn handle_key_event_overlflow() {
+        let mut app = App::default();
+        assert!(app.handle_key_event(KeyCode::Char('k').into()).is_ok());
+        assert!(app.handle_key_event(KeyCode::Char('k').into()).is_ok());
+        assert_eq!(
+            app.handle_key_event(KeyCode::Char('k').into())
+                .unwrap_err()
+                .to_string(),
+            "counter overflow"
+        );
     }
 }
